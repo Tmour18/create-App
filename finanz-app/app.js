@@ -235,7 +235,7 @@ const FinLogic = (() => {
     const inc = (name, amount, note = '') => ({ id: uid(), name, amount, note });
     const exp = (name, amount, note = '', budget = '') => ({ id: uid(), name, amount, note, budget });
     const pot = (name, deposit = '', start = '') => ({ id: uid(), pid: uid(), name, deposit, interest: '', start });
-    const goal = (name, target = '', deposit = '') => ({ id: uid(), gid: uid(), name, deposit, target, start: '' });
+    const goal = (name, start = '', target = '', deposit = '') => ({ id: uid(), gid: uid(), name, deposit, target, start });
     return {
       id: uid(), created: now, date, carry: '',
       income: [inc('Gehalt', '957')],
@@ -246,7 +246,7 @@ const FinLogic = (() => {
       ],
       pots: [pot('Auto-Vorsorge'), pot('Autosteuer-Vorsorge'), pot('Garantie-Vorsorge'),
         pot('Geschenkvorsorge', '50', '95')],
-      goals: [goal('Urlaub', '2129'), goal('Investition')],
+      goals: [goal('Urlaub', '2129'), goal('Investition')], // Urlaub: 2.129 € bereits gespart
     };
   }
 

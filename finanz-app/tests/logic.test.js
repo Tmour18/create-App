@@ -53,10 +53,11 @@ test('Geschenkvorsorge: 95 + 50 = 145', () => {
 });
 test('Gesamtstand aller Töpfe = 145', () => assert.equal(r1.potsTotal, 145));
 test('Übertrag = 957 − 593,50 − 50 − 0 = 313,50', () => assert.equal(r1.carryOut, 313.5));
-test('Urlaub: Ziel 2.129, Fortschritt 0 %', () => {
+test('Urlaub: 2.129 bereits gespart (Anfangsstand), kein Einfluss auf Übertrag', () => {
   const u = r1.goals[m1.goals[0].id];
-  assert.equal(u.target, 2129); assert.equal(u.pct, 0);
+  assert.equal(u.start, 2129); assert.equal(u.end, 2129); assert.equal(r1.goalDeposits, 0);
 });
+test('Geschenkvorsorge: 95 bereits gesammelt zählt nicht als Abfluss', () => assert.equal(r1.potDeposits, 50));
 
 console.log('\nNeuer Monat aus Vorlage');
 const m2 = F.templateFrom(m1, uid, 2);
@@ -111,9 +112,14 @@ m1.goals[0].deposit = '100';
 m2.goals[0].deposit = '100';
 C = F.computeAll(state.months); r1 = C.byId[m1.id]; r2 = C.byId[m2.id];
 test('Sparziel-Einzahlung mindert Übertrag (Nov: 957 − 613,50 − 70 − 100 = 173,50)', () => assert.equal(r1.carryOut, 173.5));
-test('Urlaub Dezember gespart 200, Fortschritt 200/2129', () => {
+test('Urlaub läuft weiter: 2.129 + 100 + 100 = 2.329', () => {
   const u = r2.goals[m2.goals[0].id];
-  assert.equal(u.end, 200); assert.ok(Math.abs(u.pct - 200 / 2129) < 1e-9);
+  assert.equal(u.start, 2229); assert.equal(u.end, 2329);
+});
+test('Mit Ziel 3.000: November-Fortschritt 2.229 / 3.000', () => {
+  m1.goals[0].target = '3000';
+  const u = F.computeAll(state.months).byId[m1.id].goals[m1.goals[0].id];
+  assert.ok(Math.abs(u.pct - 2229 / 3000) < 1e-9);
 });
 
 console.log('\nSonstiges');
