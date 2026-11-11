@@ -107,19 +107,47 @@ geschenk(m2).start = '200';
 C = F.computeAll(state.months); r2 = C.byId[m2.id];
 test('Topf-Anfangsstand manuell 200 → 200+50+1,23 = 251,23', () => assert.equal(r2.pots[geschenk(m2).id].end, 251.23));
 
-console.log('\nSparziele');
+console.log('\nRücklagen (Urlaub & Investition)');
 m1.goals[0].deposit = '100';
 m2.goals[0].deposit = '100';
 C = F.computeAll(state.months); r1 = C.byId[m1.id]; r2 = C.byId[m2.id];
-test('Sparziel-Einzahlung mindert Übertrag (Nov: 957 − 613,50 − 70 − 100 = 173,50)', () => assert.equal(r1.carryOut, 173.5));
-test('Urlaub läuft weiter: 2.129 + 100 + 100 = 2.329', () => {
+test('Urlaub beiseitelegen mindert Übertrag (Nov: 957 − 613,50 − 70 − 100 = 173,50)', () => assert.equal(r1.carryOut, 173.5));
+test('Urlaub Gesamt läuft weiter: 2.129 + 100 + 100 = 2.329', () => {
   const u = r2.goals[m2.goals[0].id];
   assert.equal(u.start, 2229); assert.equal(u.end, 2329);
 });
-test('Mit Ziel 3.000: November-Fortschritt 2.229 / 3.000', () => {
-  m1.goals[0].target = '3000';
-  const u = F.computeAll(state.months).byId[m1.id].goals[m1.goals[0].id];
-  assert.ok(Math.abs(u.pct - 2229 / 3000) < 1e-9);
+const carryBefore = r2.carryOut;
+m2.goals[0].spent = '74';
+C = F.computeAll(state.months); r2 = C.byId[m2.id];
+test('Aus Urlaub 74 ausgegeben → Gesamt 2.255, Übertrag unverändert', () => {
+  assert.equal(r2.goals[m2.goals[0].id].end, 2255); assert.equal(r2.carryOut, carryBefore);
+});
+m2.goals[1].deposit = '150';
+C = F.computeAll(state.months); r2 = C.byId[m2.id];
+test('Investition 150 wird vom Monatsgeld abgezogen', () => {
+  assert.equal(r2.goalDeposits, 250); assert.equal(r2.carryOut, F.round2(carryBefore - 150));
+  assert.equal(r2.goals[m2.goals[1].id].end, 150);
+});
+test('Rücklagen gesamt = 2.255 + 150 = 2.405', () => assert.equal(r2.goalsTotal, 2405));
+test('Neuer Monat: "ausgegeben" startet leer, Gesamt läuft weiter', () => {
+  const m3 = F.templateFrom(m2, uid, 3);
+  const r3 = F.computeAll([...state.months, m3]).byId[m3.id];
+  assert.equal(m3.goals[0].spent, ''); assert.equal(r3.goals[m3.goals[0].id].start, 2255);
+});
+test('Alte Daten mit Zielbetrag laden weiterhin (Ziel wird ignoriert)', () => {
+  const s2 = F.normalizeState({ months: [{ id: 'x', date: '2026-11-01', goals: [{ id: 'g', gid: 'G', name: 'Urlaub', target: '2129', start: '2129' }] }] }, uid);
+  const r = F.computeAll(s2.months).byId.x;
+  assert.equal(r.goals.g.end, 2129); assert.equal(s2.months[0].goals[0].spent, '');
+});
+
+console.log('\nGesamtbetrag eintippen');
+test('Autovorsorge Gesamt 528 bei Einzahlung 50 → Stand Vormonat 478', () => assert.equal(F.startFromTotal(528, 50), 478));
+test('mit Zinsen 2 → Stand Vormonat 476', () => assert.equal(F.startFromTotal(528, 50, 2), 476));
+test('Urlaub Gesamt 2.055 bei 0 eingezahlt, 74 ausgegeben → Vormonat 2.129', () => assert.equal(F.startFromTotal(2055, 0, 0, 74), 2129));
+test('Rückrechnung ergibt wieder genau den Gesamtbetrag', () => {
+  const m = F.emptyMonth(uid, '2026-11-01');
+  m.pots.push({ id: 'p', pid: 'P', name: 'Autovorsorge', deposit: '50', interest: '', start: F.toRaw(F.startFromTotal(528, 50)) });
+  assert.equal(F.computeAll([m]).byId[m.id].pots.p.end, 528);
 });
 
 console.log('\nSonstiges');
@@ -141,6 +169,9 @@ test('Text-Export im Notizstil', () => {
   assert.match(txt, /Spotify: 7,50 €/);
   assert.match(txt, /Versicherung: 80 € \(sollte 90 sein\)/);
   assert.match(txt, /Übertrag nächster Monat: /);
+  assert.match(txt, /Vorsorge \(Trade\):/);
+  assert.match(txt, /Geschenkvorsorge: \+70 € = \(Gesamt: 165 €\)/);
+  assert.match(txt, /Rücklagen:\nUrlaub: \+100 € = \(Gesamt: 2\.229 €\)/);
 });
 
 console.log(`\n${n - failed}/${n} Tests bestanden`);

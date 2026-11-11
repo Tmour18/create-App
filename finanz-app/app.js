@@ -135,8 +135,10 @@ const FinLogic = (() => {
   /**
    * Berechnet alle Monate in Datumsreihenfolge.
    *   Verfügbar = Übertrag aus Vormonat + Einnahmen
-   *   Übertrag  = Verfügbar − Ausgaben − Vorsorge-Einzahlungen − Sparziel-Einzahlungen
-   *   Topf-Stand = Anfangsstand + Einzahlung + Zinsen (Zinsen ändern den Übertrag nicht)
+   *   Übertrag  = Verfügbar − Ausgaben − Vorsorge-Einzahlungen − Rücklagen (Urlaub, Investition …)
+   *   Topf-Gesamt = Stand Vormonat + Einzahlung + Zinsen (Zinsen ändern den Übertrag nicht)
+   *   Rücklage-Gesamt = Stand Vormonat + diesen Monat − daraus ausgegeben
+   *     (Ausgegebenes war schon beim Beiseitelegen abgezogen und ändert den Übertrag nicht)
    * Anfangsstände und Übertrag kommen automatisch aus dem Vormonat,
    * außer sie sind im Monat manuell überschrieben.
    */
@@ -177,11 +179,10 @@ const FinLogic = (() => {
         const manual = !isBlank(g.start);
         const start = manual ? val(g.start) : startAuto;
         const deposit = val(g.deposit);
-        const target = val(g.target);
-        const end = round2(start + deposit);
+        const spent = val(g.spent);
+        const end = round2(start + deposit - spent);
         goalBal[g.gid] = end;
-        goals[g.id] = { startAuto, start, manual, deposit, target, end,
-          pct: target > 0 ? end / target : null };
+        goals[g.id] = { startAuto, start, manual, deposit, spent, end };
       }
       const goalList = Object.values(goals);
       const goalDeposits = sum(goalList.map((g) => g.deposit));
@@ -199,6 +200,14 @@ const FinLogic = (() => {
       prev = carryOut;
     });
     return { order: order.map((m) => m.id), byId };
+  }
+
+  /**
+   * Rechnet einen eingetippten Gesamtbetrag in den passenden Stand Vormonat um,
+   * damit Gesamt = Stand + Einzahlung + Zinsen − Ausgegeben genau stimmt.
+   */
+  function startFromTotal(total, deposit, interest = 0, spent = 0) {
+    return round2(total - deposit - interest + spent);
   }
 
   /** Datum "YYYY-MM-DD" um n Monate verschieben (Tag wird ggf. gekürzt). */
@@ -222,7 +231,7 @@ const FinLogic = (() => {
       income: m.income.map(cp),
       expenses: m.expenses.map(cp),
       pots: m.pots.map((p) => ({ ...cp(p), start: '', interest: '' })),
-      goals: m.goals.map((g) => ({ ...cp(g), start: '' })),
+      goals: m.goals.map((g) => ({ ...cp(g), start: '', spent: '' })),
     };
   }
 
@@ -235,7 +244,7 @@ const FinLogic = (() => {
     const inc = (name, amount, note = '') => ({ id: uid(), name, amount, note });
     const exp = (name, amount, note = '', budget = '') => ({ id: uid(), name, amount, note, budget });
     const pot = (name, deposit = '', start = '') => ({ id: uid(), pid: uid(), name, deposit, interest: '', start });
-    const goal = (name, start = '', target = '', deposit = '') => ({ id: uid(), gid: uid(), name, deposit, target, start });
+    const goal = (name, start = '', deposit = '') => ({ id: uid(), gid: uid(), name, deposit, spent: '', target: '', start });
     return {
       id: uid(), created: now, date, carry: '',
       income: [inc('Gehalt', '957')],
@@ -262,7 +271,7 @@ const FinLogic = (() => {
         income: arr(m.income).map((x) => ({ id: str(x.id) || uid(), name: str(x.name), amount: str(x.amount), note: str(x.note) })),
         expenses: arr(m.expenses).map((x) => ({ id: str(x.id) || uid(), name: str(x.name), amount: str(x.amount), note: str(x.note), budget: str(x.budget) })),
         pots: arr(m.pots).map((x) => ({ id: str(x.id) || uid(), pid: str(x.pid) || uid(), name: str(x.name), deposit: str(x.deposit), interest: str(x.interest), start: str(x.start) })),
-        goals: arr(m.goals).map((x) => ({ id: str(x.id) || uid(), gid: str(x.gid) || uid(), name: str(x.name), deposit: str(x.deposit), target: str(x.target), start: str(x.start) })),
+        goals: arr(m.goals).map((x) => ({ id: str(x.id) || uid(), gid: str(x.gid) || uid(), name: str(x.name), deposit: str(x.deposit), spent: str(x.spent), target: str(x.target), start: str(x.start) })),
       };
     });
     return { v: 1, months };
@@ -303,20 +312,20 @@ const FinLogic = (() => {
       L.push(`= ${fmtShort(r.expenses)}`, '');
     }
     if (m.pots.length) {
-      L.push('Vorsorge (Tagesgeld):');
+      L.push('Vorsorge (Trade):');
       for (const p of m.pots) {
         const c = r.pots[p.id];
         const zins = c.interest ? `, Zinsen ${fmtShort(c.interest)}` : '';
-        L.push(`${named(p, 'Topf')}: +${fmtShort(c.deposit)}${zins} → Stand ${fmtShort(c.end)}`);
+        L.push(`${named(p, 'Topf')}: +${fmtShort(c.deposit)}${zins} = (Gesamt: ${fmtShort(c.end)})`);
       }
       L.push(`Gesamtstand Vorsorge: ${fmtShort(r.potsTotal)}`, '');
     }
     if (m.goals.length) {
-      L.push('Sparziele:');
+      L.push('Rücklagen:');
       for (const g of m.goals) {
         const c = r.goals[g.id];
-        const ziel = c.target > 0 ? ` von ${fmtShort(c.target)}` : '';
-        L.push(`${named(g, 'Ziel')}: +${fmtShort(c.deposit)} → ${fmtShort(c.end)}${ziel}`);
+        const aus = c.spent ? `, ausgegeben ${fmtShort(c.spent)}` : '';
+        L.push(`${named(g, 'Rücklage')}: ${c.deposit < 0 ? '' : '+'}${fmtShort(c.deposit)}${aus} = (Gesamt: ${fmtShort(c.end)})`);
       }
       L.push('');
     }
@@ -325,7 +334,7 @@ const FinLogic = (() => {
   }
 
   return {
-    round2, isBlank, parseNum, evaluate, val, isValid, hasOperator, sortMonths, computeAll,
+    round2, isBlank, parseNum, evaluate, val, isValid, hasOperator, sortMonths, computeAll, startFromTotal,
     addMonths, templateFrom, emptyMonth, sampleMonth, normalizeState, fmt, fmtNum, fmtShort,
     toRaw, fmtDate, monthName, monthShort, monthText,
   };
@@ -340,7 +349,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   const F = FinLogic;
   const KEY = 'finanzen.v1';
   const UIKEY = 'finanzen.ui.v1';
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const DEL_W = 92; // Breite des Lösch-Buttons beim Wischen
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -523,16 +532,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         ${sectionHTML('expenses', 'Ausgaben', 'red', m.expenses, '＋ Ausgabe')}
 
         <section class="sec">
-          <div class="sec-head"><h2>Vorsorge-Töpfe <small>Tagesgeld</small></h2><b class="blue" data-out="potDeposits"></b></div>
+          <div class="sec-head"><h2>Vorsorge-Töpfe <small>Trade</small></h2><b class="blue" data-out="potDeposits"></b></div>
           <div class="pots-total"><span>Gesamtstand aller Töpfe</span><b class="blue" data-out="potsTotal"></b></div>
           <div class="rows" data-list="pots">${m.pots.map((p) => potHTML(p)).join('')}</div>
           <button class="add" data-act="add" data-list="pots">＋ Topf</button>
         </section>
 
         <section class="sec">
-          <div class="sec-head"><h2>Sparziele</h2><b class="gold" data-out="goalDeposits"></b></div>
+          <div class="sec-head"><h2>Rücklagen <small>Urlaub &amp; Investition</small></h2><b class="gold" data-out="goalDeposits"></b></div>
+          <div class="pots-total gold-total"><span>Gesamt beiseitegelegt</span><b class="gold" data-out="goalsTotal"></b></div>
           <div class="rows" data-list="goals">${m.goals.map((g) => goalHTML(g)).join('')}</div>
-          <button class="add" data-act="add" data-list="goals">＋ Sparziel</button>
+          <button class="add" data-act="add" data-list="goals">＋ Rücklage</button>
         </section>
 
         <section class="card recap">
@@ -541,7 +551,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
           <div class="recap-row strong"><span>= Verfügbar</span><b data-out="available"></b></div>
           <div class="recap-row"><span>− Ausgaben</span><b class="red" data-out="expensesNeg"></b></div>
           <div class="recap-row"><span>− Vorsorge-Einzahlungen</span><b class="blue" data-out="potDepositsNeg"></b></div>
-          <div class="recap-row"><span>− Sparziele</span><b class="gold" data-out="goalDepositsNeg"></b></div>
+          <div class="recap-row"><span>− Rücklagen</span><b class="gold" data-out="goalDepositsNeg"></b></div>
           <div class="recap-row total"><span>= Übertrag in den nächsten Monat</span><b data-out="carryOut"></b></div>
         </section>
 
@@ -588,23 +598,26 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ${extra}`, isExp ? 'exp' : 'inc');
   }
 
+  /** Gesamtbetrag: zeigt den aktuellen Stand; Eintippen korrigiert den Stand Vormonat. */
+  const totalInput = (key, label) => amtInput('total', label, `data-auto="${key}"`);
+
   function potHTML(p) {
     const open = expanded.has(p.id);
     return rowShell('pots', p.id, `
       <div class="row-main">
         <span class="handle" aria-label="Verschieben">${ICON.grip}</span>
         <input class="name" data-field="name" value="${esc(p.name)}" placeholder="Topf" autocomplete="off" enterkeyhint="done">
-        <b class="pot-end blue" data-out="potEnd:${p.id}"></b>
         <button class="icon-btn more ${open ? 'on' : ''}" data-act="more" aria-label="Details">${ICON.more}</button>
       </div>
       <div class="grid2">
         <label class="fld"><span>Einzahlung</span>${amtInput('deposit', 'Einzahlung')}</label>
-        <label class="fld"><span>Zinsen</span>${amtInput('interest', 'Zinsen')}</label>
+        <label class="fld"><span>Gesamtbetrag</span>${totalInput(`potEnd:${p.id}`, 'Gesamtbetrag')}</label>
       </div>
       <div class="formula" data-out="potLine:${p.id}"></div>
       ${open ? `<div class="extra">
-        <label class="fld"><span>Anfangsstand <em data-auto-tag="potStart:${p.id}">automatisch aus Vormonat</em></span>
-          ${amtInput('start', 'Anfangsstand', `data-auto="potStart:${p.id}"`)}</label>
+        <label class="fld"><span>Zinsen (erhöhen nur den Topf)</span>${amtInput('interest', 'Zinsen')}</label>
+        <label class="fld"><span>Stand Vormonat <em data-auto-tag="potStart:${p.id}">automatisch</em></span>
+          ${amtInput('start', 'Stand Vormonat', `data-auto="potStart:${p.id}"`)}</label>
         <button class="reset" data-act="reset" data-field="start" data-reset-for="potStart:${p.id}">${ICON.reset} automatisch</button>
         <button class="link danger" data-act="del">Topf löschen</button></div>` : ''}`, 'card-row pot');
   }
@@ -614,20 +627,20 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return rowShell('goals', g.id, `
       <div class="row-main">
         <span class="handle" aria-label="Verschieben">${ICON.grip}</span>
-        <input class="name" data-field="name" value="${esc(g.name)}" placeholder="Sparziel" autocomplete="off" enterkeyhint="done">
-        <b class="pot-end gold" data-out="goalEnd:${g.id}"></b>
+        <input class="name" data-field="name" value="${esc(g.name)}" placeholder="z. B. Urlaub" autocomplete="off" enterkeyhint="done">
         <button class="icon-btn more ${open ? 'on' : ''}" data-act="more" aria-label="Details">${ICON.more}</button>
       </div>
       <div class="grid2">
-        <label class="fld"><span>Einzahlung</span>${amtInput('deposit', 'Einzahlung')}</label>
-        <label class="fld"><span>Ziel</span>${amtInput('target', 'Zielbetrag')}</label>
+        <label class="fld"><span>Diesen Monat</span>${amtInput('deposit', 'Diesen Monat beiseitegelegt')}</label>
+        <label class="fld"><span>Gesamt</span>${totalInput(`goalEnd:${g.id}`, 'Gesamt beiseitegelegt')}</label>
       </div>
-      <div class="progress" data-progress="${g.id}"><div class="bar"><i></i></div><span></span></div>
+      <div class="formula" data-out="goalLine:${g.id}"></div>
       ${open ? `<div class="extra">
-        <label class="fld"><span>Bisher gespart <em data-auto-tag="goalStart:${g.id}">automatisch aus Vormonat</em></span>
-          ${amtInput('start', 'Bisher gespart', `data-auto="goalStart:${g.id}"`)}</label>
+        <label class="fld"><span>Daraus ausgegeben (ändert den Übertrag nicht)</span>${amtInput('spent', 'Daraus ausgegeben')}</label>
+        <label class="fld"><span>Stand Vormonat <em data-auto-tag="goalStart:${g.id}">automatisch</em></span>
+          ${amtInput('start', 'Stand Vormonat', `data-auto="goalStart:${g.id}"`)}</label>
         <button class="reset" data-act="reset" data-field="start" data-reset-for="goalStart:${g.id}">${ICON.reset} automatisch</button>
-        <button class="link danger" data-act="del">Sparziel löschen</button></div>` : ''}`, 'card-row goal');
+        <button class="link danger" data-act="del">Rücklage löschen</button></div>` : ''}`, 'card-row goal');
   }
 
   function backupBannerHTML() {
@@ -663,6 +676,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const [kind, id] = key.split(':');
     if (kind === 'potStart') return R.pots[id]?.startAuto ?? 0;
     if (kind === 'goalStart') return R.goals[id]?.startAuto ?? 0;
+    if (kind === 'potEnd') return R.pots[id]?.end ?? 0;
+    if (kind === 'goalEnd') return R.goals[id]?.end ?? 0;
     return 0;
   }
   function displayAmt(inp) {
@@ -674,7 +689,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     inp.classList.remove('is-auto', 'invalid');
     inp.classList.toggle('calc', F.hasOperator(raw));
     if (F.isBlank(raw)) {
-      if (inp.dataset.auto) { inp.value = F.fmtNum(autoValue(inp.dataset.auto)); inp.classList.add('is-auto'); }
+      if (inp.dataset.auto) {
+        inp.value = F.fmtNum(autoValue(inp.dataset.auto));
+        if (inp.dataset.field !== 'total') inp.classList.add('is-auto');
+      }
       else inp.value = '';
       inp.placeholder = '0,00';
     } else {
@@ -695,14 +713,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       expenses: F.fmt(r.expenses), expensesNeg: neg(r.expenses),
       potDeposits: F.fmt(r.potDeposits), potDepositsNeg: neg(r.potDeposits),
       goalDeposits: F.fmt(r.goalDeposits), goalDepositsNeg: neg(r.goalDeposits),
-      potsTotal: F.fmt(r.potsTotal), carryOut: F.fmt(r.carryOut),
+      potsTotal: F.fmt(r.potsTotal), goalsTotal: F.fmt(r.goalsTotal), carryOut: F.fmt(r.carryOut),
     };
     for (const p of m.pots) {
       const c = r.pots[p.id];
       out[`potEnd:${p.id}`] = F.fmt(c.end);
-      out[`potLine:${p.id}`] = `${F.fmt(c.start)} + ${F.fmt(c.deposit)}${c.interest ? ` + ${F.fmt(c.interest)} Zinsen` : ''} = ${F.fmt(c.end)}`;
+      out[`potLine:${p.id}`] = `Vormonat ${F.fmt(c.start)} + ${F.fmt(c.deposit)}${c.interest ? ` + ${F.fmt(c.interest)} Zinsen` : ''}`;
     }
-    for (const g of m.goals) out[`goalEnd:${g.id}`] = F.fmt(r.goals[g.id].end);
+    for (const g of m.goals) {
+      const c = r.goals[g.id];
+      out[`goalLine:${g.id}`] = `Vormonat ${F.fmt(c.start)} ${c.deposit < 0 ? '−' : '+'} ${F.fmt(Math.abs(c.deposit))}${c.spent ? ` − ${F.fmt(c.spent)} ausgegeben` : ''}`;
+    }
 
     $$('[data-out]').forEach((el) => {
       const v = out[el.dataset.out];
@@ -710,18 +731,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     });
     $$('[data-out="carryOut"]').forEach((el) => el.classList.toggle('negative', r.carryOut < 0));
 
-    // Fortschrittsbalken der Sparziele
-    for (const g of m.goals) {
-      const el = $(`[data-progress="${g.id}"]`);
-      if (!el) continue;
-      const c = r.goals[g.id];
-      el.hidden = c.pct === null;
-      if (c.pct !== null) {
-        el.querySelector('i').style.width = `${Math.min(100, Math.max(0, c.pct * 100))}%`;
-        el.querySelector('span').textContent = `${Math.round(c.pct * 100)} % · noch ${F.fmt(Math.max(0, c.target - c.end))}`;
-        el.classList.toggle('done', c.pct >= 1);
-      }
-    }
     // Budgets
     for (const x of m.expenses) {
       const el = $(`[data-budget="${x.id}"]`);
@@ -784,7 +793,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
           <div class="tile"><small>Übertrag ${esc(F.monthShort(m.date))}</small><b class="gold">${F.fmt(R.carryOut)}</b></div>
           <div class="tile"><small>Vorsorge gesamt</small><b class="blue">${F.fmt(R.potsTotal)}</b></div>
           <div class="tile"><small>Ø Ausgaben / Monat</small><b class="red">${F.fmt(F.round2(months.reduce((a, x) => a + C.byId[x.id].expenses, 0) / months.length))}</b></div>
-          <div class="tile"><small>Sparziele gesamt</small><b>${F.fmt(R.goalsTotal)}</b></div>
+          <div class="tile"><small>Rücklagen gesamt</small><b>${F.fmt(R.goalsTotal)}</b></div>
         </div>
         <section class="card">
           <div class="sec-head"><h2>Ausgaben nach Kategorie</h2></div>
@@ -906,8 +915,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         <section class="card info">
           <h2>So wird gerechnet</h2>
           <p><b>Verfügbar</b> = Übertrag aus Vormonat + Einnahmen<br>
-          <b>Übertrag</b> = Verfügbar − Ausgaben − Vorsorge-Einzahlungen − Sparziel-Einzahlungen<br>
-          <b>Topf-Stand</b> = Anfangsstand + Einzahlung + Zinsen. Zinsen erhöhen nur den Topf, nicht den Übertrag.</p>
+          <b>Übertrag</b> = Verfügbar − Ausgaben − Vorsorge-Einzahlungen − Rücklagen<br>
+          <b>Topf-Gesamt</b> = Stand Vormonat + Einzahlung + Zinsen. Zinsen erhöhen nur den Topf, nicht den Übertrag.<br>
+          <b>Rücklage-Gesamt</b> (Urlaub, Investition) = Stand Vormonat + diesen Monat − daraus ausgegeben. Was du aus einer Rücklage ausgibst, ändert den Übertrag nicht – das Geld wurde schon beim Beiseitelegen abgezogen.</p>
+          <p class="muted">Tippst du einen <b>Gesamtbetrag</b> ein, passt die App den Stand Vormonat so an, dass die Summe stimmt.</p>
           <p class="muted">In Betragsfeldern kannst du rechnen, z. B. <code>100+20</code> oder <code>12,5*3</code>. Beim Tippen erscheint über der Tastatur eine Leiste mit + − × ÷.
           Negative Einzahlung (z. B. <code>-200</code>) = Entnahme aus dem Topf, die wieder ins Monatsgeld fließt.</p>
         </section>
@@ -994,7 +1005,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (list === 'income') return { ...base, amount: '', note: '' };
     if (list === 'expenses') return { ...base, amount: '', note: '', budget: '' };
     if (list === 'pots') return { ...base, pid: uid(), deposit: '', interest: '', start: '' };
-    return { ...base, gid: uid(), deposit: '', target: '', start: '' };
+    return { ...base, gid: uid(), deposit: '', spent: '', target: '', start: '' };
   }
 
   function addRow(list) {
@@ -1142,6 +1153,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const obj = ctx && findObj(ctx);
     if (!obj) return;
     checkpoint(`${ctx.dataset.id}.${inp.dataset.field}`);
+    if (inp.dataset.field === 'total') {
+      // Gesamtbetrag eingetippt → Stand Vormonat so setzen, dass die Summe passt
+      const v = F.evaluate(inp.value);
+      if (v === null || Number.isNaN(v)) return;
+      obj.start = F.toRaw(F.startFromTotal(F.round2(v), F.val(obj.deposit), F.val(obj.interest), F.val(obj.spent)));
+      save();
+      updateTotals();
+      return;
+    }
     obj[inp.dataset.field] = inp.value;
     save();
     if (inp.classList.contains('amt') || inp.dataset.field === 'budget') updateTotals();
@@ -1360,7 +1380,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   window.addEventListener('resize', () => { if (ui.tab === 'stats') renderStats(); });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(() => {}));
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      location.reload(); // neue App-Version laden; Daten bleiben in localStorage
+    });
+    window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js')
+      .then((reg) => reg.update()).catch(() => {}));
   }
   render();
 })();

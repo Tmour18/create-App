@@ -98,6 +98,10 @@ b, .amt, [data-out] { font-variant-numeric: tabular-nums; }
 }
 .pots-total span { color: var(--blue); font-size: 15px; font-weight: 600; }
 .pots-total b { font-size: 22px; }
+.gold-total { background: var(--gold-bg); }
+.gold-total span { color: var(--gold); }
+.pot .amt[data-field="total"] { color: var(--blue); }
+.goal .amt[data-field="total"] { color: var(--gold); }
 
 /* ---------- Zeilen ---------- */
 .rows { display: flex; flex-direction: column; gap: 6px; }
