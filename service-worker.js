@@ -2,7 +2,7 @@
  * Strategie: aus dem Cache antworten (sofort, auch offline) und im Hintergrund
  * aktualisieren. Nach einem Update: CACHE-Version erhöhen.
  * Es werden keine Daten verschickt – nur die eigenen App-Dateien geladen. */
-const CACHE = 'finanzen-v1';
+const CACHE = 'finanzen-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -16,7 +16,7 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
